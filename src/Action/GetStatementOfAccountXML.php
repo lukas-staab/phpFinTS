@@ -38,10 +38,15 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
     private $camtURN;
     /** @var bool */
     private $allAccounts;
+    /** @var bool */
+    private $includeUnbooked;
 
     // Response
     /** @var string[] */
     protected $xml = [];
+
+    /** @var string[] */
+    protected $unbookedXml = [];
 
     /**
      * @param SEPAAccount $account The account to get the statement for. This can be constructed based on information
@@ -53,9 +58,13 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
      *     For example urn:iso:std:iso:20022:tech:xsd:camt.052.001.02
      * @param bool $allAccounts If set to true, will return statements for all accounts of the user. You still need to
      *     pass one of the accounts into $account, though.
+     * @param bool $includeUnbooked If set to true, transactions that the bank has received but not booked yet are
+     *     included in {@link getStatement()} and {@link getRawResponse()}. Note that the bank decides whether to send
+     *     them at all: they are always absent for a time range that lies in the past, and {@link getUnbookedXML()}
+     *     exposes them regardless of this flag if the bank did send them.
      * @return GetStatementOfAccountXML A new action instance.
      */
-    public static function create(SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, ?string $camtURN = null, bool $allAccounts = false): GetStatementOfAccountXML
+    public static function create(SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, ?string $camtURN = null, bool $allAccounts = false, bool $includeUnbooked = false): GetStatementOfAccountXML
     {
         if ($from !== null && $to !== null && $from > $to) {
             throw new \InvalidArgumentException('From-date must be before to-date');
@@ -67,6 +76,7 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
         $result->from = $from;
         $result->to = $to;
         $result->allAccounts = $allAccounts;
+        $result->includeUnbooked = $includeUnbooked;
         return $result;
     }
 
@@ -83,6 +93,7 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
         return [
             parent::__serialize(),
             $this->account, $this->camtURN, $this->from, $this->to, $this->allAccounts,
+            $this->includeUnbooked,
         ];
     }
 
@@ -102,6 +113,7 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
         list(
             $parentSerialized,
             $this->account, $this->camtURN, $this->from, $this->to, $this->allAccounts,
+            $this->includeUnbooked,
         ) = $serialized;
 
         is_array($parentSerialized) ?
@@ -111,7 +123,9 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
 
     public function getRawResponse(): array
     {
-        return $this->getBookedXML();
+        return $this->includeUnbooked
+            ? array_merge($this->getBookedXML(), $this->getUnbookedXML())
+            : $this->getBookedXML();
     }
 
     /**
@@ -121,6 +135,18 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
     {
         $this->ensureDone();
         return $this->xml;
+    }
+
+    /**
+     * @return string[] The XML-Document that contains the transactions which the bank has received but not booked yet,
+     *     or an empty array if the bank did not send any. This is independent of the $includeUnbooked flag, which only
+     *     determines whether these transactions are part of {@link getStatement()} and {@link getRawResponse()}.
+     * @noinspection PhpUnused
+     */
+    public function getUnbookedXML(): array
+    {
+        $this->ensureDone();
+        return $this->unbookedXml;
     }
 
     /**
@@ -204,6 +230,11 @@ class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
         // It seems that paginated responses, always contain a whole XML Document
         foreach ($responseHicaz[0]->getGebuchteUmsaetze() as $xml_string) {
             $this->xml[] = $xml_string;
+        }
+        // Banks only send this in case the requested time range reaches into the present.
+        $nichtGebuchteUmsaetze = $responseHicaz[0]->getNichtGebuchteUmsaetze();
+        if ($nichtGebuchteUmsaetze !== null) {
+            $this->unbookedXml[] = $nichtGebuchteUmsaetze;
         }
     }
 }

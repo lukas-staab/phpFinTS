@@ -53,8 +53,9 @@ class GetStatementOfAccount extends AbstractGetStatementOfAccount
      * @param \DateTime|null $to If set, only transactions before this date (inclusive) are returned.
      * @param bool $allAccounts If set to true, will return statements for all accounts of the user. You still need to
      *     pass one of the accounts into $account, though.
-     * @param bool $includeUnbooked If set to true, unbooked transactions are included. This is only supported in the
-     *     MT 940 format, i.e. it has no effect if the bank supports CAMT XML.
+     * @param bool $includeUnbooked If set to true, transactions that the bank has received but not booked yet are
+     *     included, in both formats. Note that the bank only sends them if the requested time range reaches into the
+     *     present.
      * @return GetStatementOfAccount A new action instance.
      */
     public static function create(SEPAAccount $account, ?\DateTime $from = null, ?\DateTime $to = null, bool $allAccounts = false, bool $includeUnbooked = false): GetStatementOfAccount
@@ -202,7 +203,8 @@ class GetStatementOfAccount extends AbstractGetStatementOfAccount
         $camtSupported = $bpd->getLatestSupportedParameters('HICAZS') !== null
             && ($upd === null || $upd->isRequestSupportedForAccount($this->account, 'HKCAZ'));
         if ($camtSupported) {
-            return GetStatementOfAccountXML::create($this->account, $this->from, $this->to, null, $this->allAccounts);
+            return GetStatementOfAccountXML::create(
+                $this->account, $this->from, $this->to, null, $this->allAccounts, $this->includeUnbooked);
         }
         if ($bpd->getLatestSupportedParameters('HIKAZS') !== null) {
             return GetStatementOfAccountMT940::create($this->account, $this->from, $this->to, $this->allAccounts, $this->includeUnbooked);

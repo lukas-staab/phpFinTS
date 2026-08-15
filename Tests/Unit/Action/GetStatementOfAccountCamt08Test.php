@@ -12,6 +12,8 @@ class GetStatementOfAccountCamt08Test extends GetStatementOfAccountAutoTest
 {
     public const CAMT_VERSION = 'camt.052.001.08';
 
+    public const STATUS_PENDING = '<Sts><Cd>PDNG</Cd></Sts>';
+
     public const CAMT_DOCUMENT = '<?xml version="1.0" encoding="ISO-8859-1" ?><Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><BkToCstmrAcctRpt><Rpt><Id>1234567890-2020-02-05</Id><Acct><Id><IBAN>DExxABCDEFGH1234567890</IBAN></Id></Acct>'
         . '<Bal><Tp><CdOrPrtry><Cd>OPBD</Cd></CdOrPrtry></Tp><Amt Ccy="EUR">1234.56</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2020-02-05</Dt></Dt></Bal>'
         . '<Ntry><Amt Ccy="EUR">123.45</Amt><CdtDbtInd>CRDT</CdtDbtInd><Sts><Cd>BOOK</Cd></Sts><BookgDt><Dt>2020-02-05</Dt></BookgDt><ValDt><Dt>2020-02-05</Dt></ValDt>'

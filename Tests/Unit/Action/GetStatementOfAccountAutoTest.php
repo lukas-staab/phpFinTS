@@ -42,6 +42,27 @@ class GetStatementOfAccountAutoTest extends GLSIntegrationTestBase
     /** The CAMT version that {@link CAMT_DOCUMENT} uses, as announced by the bank in the HICAZ segment. */
     public const CAMT_VERSION = 'camt.052.001.02';
 
+    /** How this CAMT version spells the status of a transaction that the bank has not booked yet. */
+    public const STATUS_PENDING = '<Sts>PDNG</Sts>';
+
+    /** The separate document that the bank sends for transactions it has received but not booked yet. */
+    private static function unbookedCamtDocument(): string
+    {
+        return '<?xml version="1.0" encoding="ISO-8859-1" ?><Document xmlns="urn:iso:std:iso:20022:tech:xsd:' . static::CAMT_VERSION . '">'
+            . '<BkToCstmrAcctRpt><Rpt><Id>1234567890-vorgemerkt</Id><Acct><Id><IBAN>DExxABCDEFGH1234567890</IBAN></Id></Acct>'
+            . '<Ntry><Amt Ccy="EUR">17.50</Amt><CdtDbtInd>DBIT</CdtDbtInd>' . static::STATUS_PENDING
+            . '<BookgDt><Dt>2020-02-05</Dt></BookgDt><ValDt><Dt>2020-02-05</Dt></ValDt>'
+            . '<NtryDtls><TxDtls><RmtInf><Ustrd>TANKSTELLE</Ustrd></RmtInf></TxDtls></NtryDtls></Ntry>'
+            . '</Rpt></BkToCstmrAcctRpt></Document>';
+    }
+
+    /** Like {@link hicazWithTransactions()}, but the bank also sends the not-yet-booked transactions. */
+    private static function hicazWithUnbookedTransactions(): string
+    {
+        $unbooked = self::unbookedCamtDocument();
+        return rtrim(self::hicazWithTransactions(), "'") . '+@' . strlen($unbooked) . '@' . $unbooked . "'";
+    }
+
     /** Like {@link GetStatementOfAccountXMLTest::GET_STATEMENT_EMPTY_HICAZ_RESPONSE}, but with actual transactions. */
     private static function hicazWithTransactions(): string
     {
@@ -148,5 +169,74 @@ class GetStatementOfAccountAutoTest extends GLSIntegrationTestBase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches('/retrieved with .*GetStatementOfAccountXML.*GetStatementOfAccountMT940/s');
         $getStatement->getRawMT940();
+    }
+
+    /**
+     * Banks report transactions that they have received but not booked yet in a separate CAMT document. They are only
+     * part of the statement if the caller asked for them.
+     *
+     * @throws \Throwable
+     */
+    public function testUnbookedTransactionsAreIncludedWhenRequested()
+    {
+        $this->initDialog();
+
+        $this->expectMessage(GetStatementOfAccountXMLTest::GET_STATEMENT_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::GET_STATEMENT_RESPONSE_BEFORE_TAN, 'ISO-8859-1', 'UTF-8'));
+        // The request is the same either way, the bank decides whether to send unbooked transactions at all.
+        $getStatement = GetStatementOfAccountXML::create(
+            $this->getTestAccount(), new \DateTime('2020-02-05'), null, null, false, true);
+        $this->fints->execute($getStatement);
+
+        $this->expectMessage(GetStatementOfAccountXMLTest::SEND_TAN_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::SEND_TAN_RESPONSE . self::hicazWithUnbookedTransactions(), 'ISO-8859-1', 'UTF-8'));
+        $this->expectMessage(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_2_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_2_RESPONSE, 'ISO-8859-1', 'UTF-8'));
+        $this->expectMessage(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_3_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_3_RESPONSE, 'ISO-8859-1', 'UTF-8'));
+        $this->fints->submitTan($getStatement, '123456');
+
+        // The pages without unbooked transactions must not add anything, and the booked ones stay separate.
+        $this->assertSame([self::unbookedCamtDocument()], $getStatement->getUnbookedXML());
+        $this->assertCount(3, $getStatement->getBookedXML());
+        $this->assertCount(4, $getStatement->getRawResponse());
+
+        $transactions = $getStatement->getStatement()->getStatements()[0]->getTransactions();
+        $this->assertCount(4, $transactions);
+        $unbooked = $transactions[3];
+        $this->assertFalse($unbooked->getBooked());
+        $this->assertEqualsWithDelta(17.50, $unbooked->getAmount(), 0.01);
+        $this->assertEquals('TANKSTELLE', $unbooked->getMainDescription());
+    }
+
+    /**
+     * Unbooked transactions that the caller did not ask for stay out of the statement, but remain accessible.
+     *
+     * @throws \Throwable
+     */
+    public function testUnbookedTransactionsAreExcludedByDefault()
+    {
+        $this->initDialog();
+
+        $this->expectMessage(GetStatementOfAccountXMLTest::GET_STATEMENT_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::GET_STATEMENT_RESPONSE_BEFORE_TAN, 'ISO-8859-1', 'UTF-8'));
+        $getStatement = $this->runInitialRequest(); // Does not ask for unbooked transactions.
+
+        $this->expectMessage(GetStatementOfAccountXMLTest::SEND_TAN_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::SEND_TAN_RESPONSE . self::hicazWithUnbookedTransactions(), 'ISO-8859-1', 'UTF-8'));
+        $this->expectMessage(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_2_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_2_RESPONSE, 'ISO-8859-1', 'UTF-8'));
+        $this->expectMessage(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_3_REQUEST,
+            mb_convert_encoding(GetStatementOfAccountXMLTest::GET_STATEMENT_PAGE_3_RESPONSE, 'ISO-8859-1', 'UTF-8'));
+        $this->fints->submitTan($getStatement, '123456');
+
+        // The bank sent them anyway, so they are still available separately ...
+        $delegate = $getStatement->getDelegate();
+        $this->assertInstanceOf(GetStatementOfAccountXML::class, $delegate);
+        $this->assertSame([self::unbookedCamtDocument()], $delegate->getUnbookedXML());
+
+        // ... but they are not part of the statement, which only has the three transactions of the booked document.
+        $this->assertCount(3, $getStatement->getRawResponse());
+        $this->assertCount(3, $getStatement->getStatement()->getStatements()[0]->getTransactions());
     }
 }
