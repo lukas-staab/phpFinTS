@@ -4,8 +4,9 @@
 
 namespace Fhp\Action;
 
+use Fhp\CAMT\CAMT;
 use Fhp\Model\SEPAAccount;
-use Fhp\PaginateableAction;
+use Fhp\Model\StatementOfAccount\StatementOfAccount;
 use Fhp\Protocol\BPD;
 use Fhp\Protocol\Message;
 use Fhp\Protocol\UnexpectedResponseException;
@@ -20,10 +21,11 @@ use Fhp\Segment\SPA\HISPAS;
 use Fhp\UnsupportedException;
 
 /**
- * Retrieves statements for one specific account or for all accounts that the user has access to. A statement is a
- * series of financial transactions that pertain to the account, grouped by day.
+ * Retrieves statements in the CAMT XML format (HKCAZ), which supersedes the MT 940 format (see
+ * {@link GetStatementOfAccountMT940}). Use this action directly if your application needs the raw XML documents,
+ * otherwise you probably want {@link GetStatementOfAccount}, which picks whichever format the bank supports.
  */
-class GetStatementOfAccountXML extends PaginateableAction
+class GetStatementOfAccountXML extends AbstractGetStatementOfAccount
 {
     // Request (if you add a field here, update __serialize() and __unserialize() as well).
     /** @var SEPAAccount */
@@ -107,6 +109,11 @@ class GetStatementOfAccountXML extends PaginateableAction
             parent::unserialize($parentSerialized);
     }
 
+    public function getRawResponse(): array
+    {
+        return $this->getBookedXML();
+    }
+
     /**
      * @return string[] The XML-Document(s) received from the bank, or empty array if the statement is unavailable/empty.
      */
@@ -114,6 +121,28 @@ class GetStatementOfAccountXML extends PaginateableAction
     {
         $this->ensureDone();
         return $this->xml;
+    }
+
+    /**
+     * @return StatementOfAccount The transactions from the CAMT XML document(s), for applications that don't want to
+     *     parse the XML themselves. Use {@link getBookedXML()} to access the raw documents. Note that this conversion
+     *     is lossy, see {@link CAMT}.
+     */
+    public function getStatement(): StatementOfAccount
+    {
+        $xmlStrings = $this->getRawResponse();
+        if (empty($xmlStrings)) {
+            // No transactions available
+            return new StatementOfAccount();
+        }
+
+        try {
+            $parser = new CAMT();
+            $parsedCAMT = $parser->parse($xmlStrings);
+            return StatementOfAccount::fromCAMTArray($parsedCAMT);
+        } catch (\Exception $e) {
+            throw new \InvalidArgumentException('Invalid CAMT XML data', 0, $e);
+        }
     }
 
     protected function createRequest(BPD $bpd, ?UPD $upd)
