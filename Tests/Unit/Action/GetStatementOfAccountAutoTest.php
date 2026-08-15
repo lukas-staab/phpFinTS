@@ -25,8 +25,8 @@ use Fhp\Tests\Unit\Integration\GLS\GLSIntegrationTestBase;
 class GetStatementOfAccountAutoTest extends GLSIntegrationTestBase
 {
     /**
-     * A minimal, synthetic camt.052 document, modelled after the (private) one from issue #553: two booked entries and
-     * an opening balance. Kept ASCII-only so that its length is the same before and after the ISO-8859-1 conversion
+     * A minimal, synthetic camt.052 document, modelled after the (private) one from issue #553: two booked entries, a
+     * pending (not yet booked) one and an opening balance. Kept ASCII-only so that its length is the same before and after the ISO-8859-1 conversion
      * that the responses go through.
      */
     public const CAMT_DOCUMENT = '<?xml version="1.0" encoding="ISO-8859-1" ?><Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><BkToCstmrAcctRpt><Rpt><Id>1234567890-2020-02-05</Id><Acct><Id><IBAN>DExxABCDEFGH1234567890</IBAN></Id></Acct>'
@@ -35,6 +35,8 @@ class GetStatementOfAccountAutoTest extends GLSIntegrationTestBase
         . '<NtryDtls><TxDtls><RmtInf><Ustrd>GUTSCHRIFT TESTZAHLUNG</Ustrd></RmtInf><RltdPties><Dbtr><Nm>SENDER NAME</Nm></Dbtr></RltdPties></TxDtls></NtryDtls></Ntry>'
         . '<Ntry><Amt Ccy="EUR">42.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><Dt>2020-02-05</Dt></BookgDt><ValDt><Dt>2020-02-06</Dt></ValDt>'
         . '<NtryDtls><TxDtls><RmtInf><Ustrd>MIETE FEBRUAR</Ustrd></RmtInf><RltdPties><Cdtr><Nm>EMPFAENGER NAME</Nm></Cdtr></RltdPties></TxDtls></NtryDtls></Ntry>'
+        . '<Ntry><Amt Ccy="EUR">9.99</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>PDNG</Sts><BookgDt><Dt>2020-02-05</Dt></BookgDt><ValDt><Dt>2020-02-05</Dt></ValDt>'
+        . '<NtryDtls><TxDtls><RmtInf><Ustrd>KARTENZAHLUNG VORGEMERKT</Ustrd></RmtInf><RltdPties><Cdtr><Nm>SUPERMARKT</Nm></Cdtr></RltdPties></TxDtls></NtryDtls></Ntry>'
         . '</Rpt></BkToCstmrAcctRpt></Document>';
 
     /** The CAMT version that {@link CAMT_DOCUMENT} uses, as announced by the bank in the HICAZ segment. */
@@ -101,7 +103,7 @@ class GetStatementOfAccountAutoTest extends GLSIntegrationTestBase
         $statement1 = $statement->getStatements()[0];
         $this->assertEquals(new \DateTime('2020-02-05'), $statement1->getDate());
         $this->assertEqualsWithDelta(1234.56, $statement1->getStartBalance(), 0.01);
-        $this->assertCount(2, $statement1->getTransactions());
+        $this->assertCount(3, $statement1->getTransactions());
 
         $transaction1 = $statement1->getTransactions()[0];
         $this->assertEquals(Statement::CD_CREDIT, $transaction1->getCreditDebit());
@@ -114,6 +116,12 @@ class GetStatementOfAccountAutoTest extends GLSIntegrationTestBase
         $this->assertEqualsWithDelta(42.00, $transaction2->getAmount(), 0.01);
         $this->assertEquals(new \DateTime('2020-02-06'), $transaction2->getValutaDate());
         $this->assertEquals('EMPFAENGER NAME', $transaction2->getName());
+
+        // The booking status has to be recognized in all CAMT versions, which spell it differently.
+        $this->assertTrue($transaction1->getBooked());
+        $this->assertTrue($transaction2->getBooked());
+        $this->assertFalse($statement1->getTransactions()[2]->getBooked());
+        $this->assertEquals('SUPERMARKT', $statement1->getTransactions()[2]->getName());
     }
 
     /**
